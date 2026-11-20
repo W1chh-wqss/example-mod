@@ -1,100 +1,114 @@
-/**
- * Include the Geode headers.
- */
 #include <Geode/Geode.hpp>
+#include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/PauseLayer.hpp>
 
-/**
- * Brings cocos2d and all Geode namespaces to the current scope.
- */
 using namespace geode::prelude;
 
-/**
- * `$modify` lets you extend and modify GD's classes.
- * To hook a function in Geode, simply $modify the class
- * and write a new function definition with the signature of
- * the function you want to hook.
- *
- * Here we use the overloaded `$modify` macro to set our own class name,
- * so that we can use it for button callbacks.
- *
- * Notice the header being included, you *must* include the header for
- * the class you are modifying, or you will get a compile error.
- *
- * Another way you could do this is like this:
- *
- * struct MyMenuLayer : Modify<MyMenuLayer, MenuLayer> {};
- */
-#include <Geode/modify/MenuLayer.hpp>
-class $modify(MyMenuLayer, MenuLayer) {
-	/**
-	 * Typically classes in GD are initialized using the `init` function, (though not always!),
-	 * so here we use it to add our own button to the bottom menu.
-	 *
-	 * Note that for all hooks, your signature has to *match exactly*,
-	 * `void init()` would not place a hook!
-	*/
-	bool init() {
-		/**
-		 * We call the original init function so that the
-		 * original class is properly initialized.
-		 */
-		if (!MenuLayer::init()) {
-			return false;
-		}
+// Структура для хранения одной метки
+struct Waypoint {
+    float x;
+    float y;
+    std::string text;
+};
 
-		/**
-		 * You can use methods from the `geode::log` namespace to log messages to the console,
-		 * being useful for debugging and such. See this page for more info about logging:
-		 * https://docs.geode-sdk.org/tutorials/logging
-		*/
-		log::debug("Hello from my MenuLayer::init hook! This layer has {} children.", this->getChildrenCount());
+// Глобальный список меток для текущей сессии
+static std::vector<Waypoint> g_waypoints;
 
-		/**
-		 * See this page for more info about buttons
-		 * https://docs.geode-sdk.org/tutorials/buttons
-		*/
-		auto myButton = CCMenuItemSpriteExtra::create(
-			CCSprite::createWithSpriteFrameName("GJ_likeBtn_001.png"),
-			this,
-			/**
-			 * Here we use the name we set earlier for our modify class.
-			*/
-			menu_selector(MyMenuLayer::onMyButton)
-		);
+// 1. Логика в самой игре (отрисовка меток и проверка расстояния)
+class $modify(MyPlayLayer, PlayLayer) {
+    struct Fields {
+        CCLabelBMFont* m_hintLabel = nullptr;
+        CCDrawNode* m_markerNode = nullptr;
+    };
 
-		/**
-		 * Here we access the `bottom-menu` node by its ID, and add our button to it.
-		 * Node IDs are a Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/nodetree
-		*/
-		auto menu = this->getChildByID("bottom-menu");
-		menu->addChild(myButton);
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
 
-		/**
-		 * The `_spr` string literal operator just prefixes the string with
-		 * your mod id followed by a slash. This is good practice for setting your own node ids.
-		*/
-		myButton->setID("my-button"_spr);
+        auto winSize = CCDirector::sharedDirector()->getWinSize();
 
-		/**
-		 * We update the layout of the menu to ensure that our button is properly placed.
-		 * This is yet another Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/layouts
-		*/
-		menu->updateLayout();
+        // Создаем текст подсказки сверху экрана
+        m_fields->m_hintLabel = CCLabelBMFont::create("", "bigFont.fnt");
+        m_fields->m_hintLabel->setPosition({ winSize.width / 2, winSize.height - 45.f });
+        m_fields->m_hintLabel->setScale(0.45f);
+        m_fields->m_hintLabel->setVisible(false);
+        this->addChild(m_fields->m_hintLabel, 100);
 
-		/**
-		 * We return `true` to indicate that the class was properly initialized.
-		 */
-		return true;
-	}
+        // Создаем слой для отрисовки кружков-меток в мире уровня
+        m_fields->m_markerNode = CCDrawNode::create();
+        if (m_objectLayer) {
+            m_objectLayer->addChild(m_fields->m_markerNode, 999);
+        }
 
-	/**
-	 * This is the callback function for the button we created earlier.
-	 * The signature for button callbacks must always be the same,
-	 * return type `void` and taking a `CCObject*`.
-	*/
-	void onMyButton(CCObject*) {
-		FLAlertLayer::create("Geode", "Hello from my custom mod!", "OK")->show();
-	}
+        return true;
+    }
+
+    void postUpdate(float dt) {
+        PlayLayer::postUpdate(dt);
+
+        if (!m_player1 || !m_fields->m_markerNode || !m_fields->m_hintLabel) return;
+
+        m_fields->m_markerNode->clear();
+        auto playerPos = m_player1->getPosition();
+        bool nearAny = false;
+
+        for (const auto& wp : g_waypoints) {
+            // Рисуем яркий бирюзовый кружок на координатах метки
+            m_fields->m_markerNode->drawDot({ wp.x, wp.y }, 12.f, { 0.0f, 1.0f, 0.8f, 0.8f });
+
+            // Проверяем, находится ли игрок рядом с меткой (радиус 75 пикселей)
+            float dist = ccpDistance(playerPos, { wp.x, wp.y });
+            if (dist < 75.f) {
+                m_fields->m_hintLabel->setString(wp.text.c_str());
+                m_fields->m_hintLabel->setVisible(true);
+                nearAny = true;
+            }
+        }
+
+        if (!nearAny) {
+            m_fields->m_hintLabel->setVisible(false);
+        }
+    }
+};
+
+// 2. Кнопки в хотбаре (меню паузы) для добавления и удаления меток
+class $modify(MyPauseLayer, PauseLayer) {
+    void customSetup() {
+        PauseLayer::customSetup();
+
+        auto winSize = CCDirector::sharedDirector()->getWinSize();
+        auto menu = CCMenu::create();
+        menu->setPosition({ 0, 0 });
+        this->addChild(menu, 100);
+
+        // Кнопка "Поставить метку"
+        auto addSpr = ButtonSprite::create("+ Метка", "goldFont.fnt", "GJ_button_01.png", 0.7f);
+        auto addBtn = CCMenuItemSpriteExtra::create(
+            addSpr, this, menu_selector(MyPauseLayer::onAddWaypoint)
+        );
+        addBtn->setPosition({ winSize.width - 75.f, winSize.height / 2 + 25.f });
+        menu->addChild(addBtn);
+
+        // Кнопка "Убрать метки"
+        auto clearSpr = ButtonSprite::create("Убрать", "goldFont.fnt", "GJ_button_06.png", 0.7f);
+        auto clearBtn = CCMenuItemSpriteExtra::create(
+            clearSpr, this, menu_selector(MyPauseLayer::onClearWaypoints)
+        );
+        clearBtn->setPosition({ winSize.width - 75.f, winSize.height / 2 - 25.f });
+        menu->addChild(clearBtn);
+    }
+
+    void onAddWaypoint(CCObject*) {
+        if (auto pl = PlayLayer::get()) {
+            if (pl->m_player1) {
+                auto pos = pl->m_player1->getPosition();
+                g_waypoints.push_back({ pos.x, pos.y, "Действие: Прыгай здесь!" });
+                FLAlertLayer::create("Метка", "Метка установлена на ваших координатах!", "ОК")->show();
+            }
+        }
+    }
+
+    void onClearWaypoints(CCObject*) {
+        g_waypoints.clear();
+        FLAlertLayer::create("Метка", "Все метки на уровне удалены.", "ОК")->show();
+    }
 };
