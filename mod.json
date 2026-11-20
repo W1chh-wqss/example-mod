@@ -8,7 +8,7 @@
 	},
 	"id": "w1chh.first_mod",
 	"name": "My First Mod",
-	"version": "1.p",
+	"version": "1.0.0",
 	"developer": "W1chh",
 	"description": "$MOD_DESCRIPTION",
 	"dependencies": {
