@@ -119,3 +119,88 @@ public:
         }
     }
 };
+
+class FloatingModButton : public CCLayer {
+public:
+    CCSprite* m_icon = nullptr;
+    bool m_isDragging = false;
+    CCPoint m_touchStart;
+    CCPoint m_nodeStart;
+
+    static FloatingModButton* create() {
+        auto ret = new FloatingModButton();
+        if (ret && ret->init()) {
+            ret->autorelease();
+            return ret;
+        }
+        CC_SAFE_DELETE(ret);
+        return nullptr;
+    }
+
+    bool init() override {
+        if (!CCLayer::init()) return false;
+
+        this->setTouchEnabled(true);
+        this->setTouchMode(kCCTouchesOneByOne);
+        this->setTouchPriority(-1000);
+
+        auto winSize = CCDirector::sharedDirector()->getWinSize();
+
+        m_icon = CircleButtonSprite::createWithSpriteFrameName(
+            "GJ_plusBtn_001.png", 1.0f, CircleBaseColor::Green, CircleBaseSize::Small
+        );
+        m_icon->setPosition({ 40.f, winSize.height / 2.f });
+        this->addChild(m_icon);
+
+        return true;
+    }
+
+    bool ccTouchBegan(CCTouch* touch, CCEvent* event) override {
+        if (!m_icon || !this->isVisible()) return false;
+        auto pos = touch->getLocation();
+        auto box = m_icon->boundingBox();
+        box.origin.x -= 12.f;
+        box.origin.y -= 12.f;
+        box.size.width += 24.f;
+        box.size.height += 24.f;
+
+        if (box.containsPoint(pos)) {
+            m_touchStart = pos;
+            m_nodeStart = m_icon->getPosition();
+            m_isDragging = false;
+            return true;
+        }
+        return false;
+    }
+
+    void ccTouchMoved(CCTouch* touch, CCEvent* event) override {
+        auto pos = touch->getLocation();
+        if (ccpDistance(pos, m_touchStart) > 8.f) {
+            m_isDragging = true;
+            auto delta = ccpSub(pos, m_touchStart);
+            m_icon->setPosition(ccpAdd(m_nodeStart, delta));
+        }
+    }
+
+    void ccTouchEnded(CCTouch* touch, CCEvent* event) override {
+        if (!m_isDragging) {
+            g_cameraEditMode = !g_cameraEditMode;
+
+            if (auto pl = PlayLayer::get()) {
+                if (g_cameraEditMode) {
+                    if (pl->m_player1) {
+                        g_freeCamOffset = pl->m_player1->getPosition();
+                    }
+                    if (auto pauseLayer = CCDirector::sharedDirector()->getRunningScene()->getChildByType<PauseLayer>(0)) {
+                        pauseLayer->removeFromParentAndCleanup(true);
+                    }
+                    Notification::create("Mark Editor ON", NotificationIcon::Success)->show();
+                } else {
+                    Notification::create("Mark Editor OFF", NotificationIcon::Info)->show();
+                }
+            }
+        }
+        m_isDragging = false;
+    }
+};
+
