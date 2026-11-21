@@ -204,3 +204,165 @@ public:
     }
 };
 
+class $modify(MyPlayLayer, PlayLayer) {
+    struct Fields {
+        CCLabelBMFont* m_hintLabel = nullptr;
+        CCDrawNode* m_markerNode = nullptr;
+        CCDrawNode* m_progressBarMarks = nullptr;
+        FloatingModButton* m_floatBtn = nullptr;
+        CameraEditorOverlay* m_camOverlay = nullptr;
+        CCNode* m_labelsContainer = nullptr;
+        float m_saveTimer = 0.f;
+    };
+
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        g_cameraEditMode = false;
+        if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
+
+        auto winSize = CCDirector::sharedDirector()->getWinSize();
+
+        m_fields->m_hintLabel = CCLabelBMFont::create("", "bigFont.fnt");
+        m_fields->m_hintLabel->setPosition({ winSize.width / 2, winSize.height - 55.f });
+        m_fields->m_hintLabel->setScale(0.45f);
+        m_fields->m_hintLabel->setVisible(false);
+        this->addChild(m_fields->m_hintLabel, 100);
+
+        m_fields->m_markerNode = CCDrawNode::create();
+        m_fields->m_labelsContainer = CCNode::create();
+        if (m_objectLayer) {
+            m_objectLayer->addChild(m_fields->m_markerNode, 998);
+            m_objectLayer->addChild(m_fields->m_labelsContainer, 999);
+        }
+
+        m_fields->m_progressBarMarks = CCDrawNode::create();
+        if (m_progressBar) {
+            m_progressBar->addChild(m_fields->m_progressBarMarks, 50);
+        }
+
+        m_fields->m_camOverlay = CameraEditorOverlay::create();
+        this->addChild(m_fields->m_camOverlay, 110);
+
+        m_fields->m_floatBtn = FloatingModButton::create();
+        this->addChild(m_fields->m_floatBtn, 200);
+
+        return true;
+    }
+
+    void resetLevel() {
+        PlayLayer::resetLevel();
+
+        if (m_player1 && m_level && m_level->isPlatformer()) {
+            std::string keyX = fmt::format("plat_x_{}", m_level->m_levelID.value());
+            std::string keyY = fmt::format("plat_y_{}", m_level->m_levelID.value());
+
+            if (Mod::get()->hasSavedValue(keyX) && Mod::get()->hasSavedValue(keyY)) {
+                float savedX = Mod::get()->getSavedValue<float>(keyX);
+                float savedY = Mod::get()->getSavedValue<float>(keyY);
+                if (savedX > 10.f) {
+                    m_player1->setPosition({ savedX, savedY });
+                    m_player1->m_position = { savedX, savedY };
+                    m_player1->m_startPosition = { savedX, savedY };
+                    Notification::create("Platformer Saved Pos Loaded!", NotificationIcon::Success)->show();
+                }
+            }
+        }
+    }
+
+    void postUpdate(float dt) {
+        if (g_cameraEditMode && m_objectLayer) {
+            auto winSize = CCDirector::sharedDirector()->getWinSize();
+            m_objectLayer->setPosition({
+                winSize.width / 2.f - g_freeCamOffset.x,
+                winSize.height / 2.f - g_freeCamOffset.y
+            });
+            if (m_fields->m_camOverlay) m_fields->m_camOverlay->setVisible(true);
+        } else {
+            if (m_fields->m_camOverlay) m_fields->m_camOverlay->setVisible(false);
+            PlayLayer::postUpdate(dt);
+        }
+
+        if (!m_player1 || !m_level) return;
+
+        if (m_level->isPlatformer() && !g_cameraEditMode) {
+            m_fields->m_saveTimer += dt;
+            if (m_fields->m_saveTimer >= 2.0f) {
+                m_fields->m_saveTimer = 0.f;
+                auto pos = m_player1->getPosition();
+                if (pos.x > 10.f) {
+                    Mod::get()->setSavedValue<float>(fmt::format("plat_x_{}", m_level->m_levelID.value()), pos.x);
+                    Mod::get()->setSavedValue<float>(fmt::format("plat_y_{}", m_level->m_levelID.value()), pos.y);
+                }
+            }
+        }
+
+        if (m_fields->m_markerNode && m_fields->m_labelsContainer) {
+            m_fields->m_markerNode->clear();
+            m_fields->m_labelsContainer->removeAllChildren();
+
+            auto playerPos = m_player1->getPosition();
+            bool nearAny = false;
+
+            for (const auto& wp : g_waypoints) {
+                CCPoint pts[4] = {
+                    { wp.x, wp.y + 16.f },
+                    { wp.x + 16.f, wp.y },
+                    { wp.x, wp.y - 16.f },
+                    { wp.x - 16.f, wp.y }
+                };
+                m_fields->m_markerNode->drawPolygon(pts, 4, { 0.0f, 0.9f, 1.0f, 0.35f }, 1.5f, { 1.0f, 0.85f, 0.0f, 1.0f });
+                m_fields->m_markerNode->drawDot({ wp.x, wp.y }, 4.f, { 1.0f, 1.0f, 1.0f, 1.0f });
+
+                auto idLbl = CCLabelBMFont::create(fmt::format("#{}", wp.id).c_str(), "goldFont.fnt");
+                idLbl->setPosition({ wp.x, wp.y + 24.f });
+                idLbl->setScale(0.45f);
+                m_fields->m_labelsContainer->addChild(idLbl);
+
+                if (!g_cameraEditMode && ccpDistance(playerPos, { wp.x, wp.y }) < 85.f) {
+                    m_fields->m_hintLabel->setString(wp.text.c_str());
+                    m_fields->m_hintLabel->setVisible(true);
+                    nearAny = true;
+                }
+            }
+
+            if (!nearAny && m_fields->m_hintLabel) {
+                m_fields->m_hintLabel->setVisible(false);
+            }
+        }
+
+        if (m_fields->m_progressBarMarks && m_progressBar && m_levelLength > 0.f) {
+            m_fields->m_progressBarMarks->clear();
+            auto barSize = m_progressBar->getContentSize();
+            for (const auto& wp : g_waypoints) {
+                float pct = std::clamp(wp.x / m_levelLength, 0.f, 1.f);
+                float barX = pct * barSize.width;
+                m_fields->m_progressBarMarks->drawSegment(
+                    { barX, 0.f }, { barX, barSize.height }, 2.f, { 1.0f, 0.85f, 0.0f, 1.0f }
+                );
+            }
+        }
+    }
+
+    void onQuit() {
+        g_cameraEditMode = false;
+        if (m_player1 && m_level && m_level->isPlatformer()) {
+            auto pos = m_player1->getPosition();
+            if (pos.x > 10.f) {
+                Mod::get()->setSavedValue<float>(fmt::format("plat_x_{}", m_level->m_levelID.value()), pos.x);
+                Mod::get()->setSavedValue<float>(fmt::format("plat_y_{}", m_level->m_levelID.value()), pos.y);
+                Mod::get()->saveData();
+            }
+        }
+        PlayLayer::onQuit();
+    }
+
+    void levelComplete() {
+        g_cameraEditMode = false;
+        if (m_level && m_level->isPlatformer()) {
+            Mod::get()->setSavedValue<float>(fmt::format("plat_x_{}", m_level->m_levelID.value()), 0.f);
+            Mod::get()->setSavedValue<float>(fmt::format("plat_y_{}", m_level->m_levelID.value()), 0.f);
+            Mod::get()->saveData();
+        }
+        PlayLayer::levelComplete();
+    }
+};
+
